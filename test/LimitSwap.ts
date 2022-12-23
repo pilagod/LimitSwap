@@ -8,7 +8,7 @@ import {
     takeSnapshot,
 } from "@nomicfoundation/hardhat-network-helpers"
 import { Token } from "@uniswap/sdk-core"
-import { FeeAmount, Pool, SqrtPriceMath } from "@uniswap/v3-sdk"
+import { FeeAmount, Pool, SqrtPriceMath, TickMath } from "@uniswap/v3-sdk"
 import { Network } from "~/network"
 import { IERC20, ILimitSwap, IUniswapV3SwapRouter } from "~/typechain-types"
 import { ContractUtil, Math, TokenMath } from "~/util"
@@ -78,7 +78,7 @@ describe("LimitSwap", () => {
         const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
         await dealToken(operator, usdc, usdcAmount.toString())
 
-        const targetSqrtPriceX96 = Math.sqrtX96(
+        const sqrtPriceX96Target = Math.sqrtX96(
             TokenMath.mul(1, WETH),
             TokenMath.mul(wethPriceTarget, USDC),
         )
@@ -92,7 +92,7 @@ describe("LimitSwap", () => {
                 FeeAmount.MEDIUM,
                 true,
                 usdcAmount.toString(),
-                targetSqrtPriceX96.toString(),
+                sqrtPriceX96Target.toString(),
             )
         const createOrderReceipt = await createOrderTx.wait()
         const [
@@ -109,7 +109,7 @@ describe("LimitSwap", () => {
 
         const wethAmountToTargetPrice = SqrtPriceMath.getAmount1Delta(
             pool0.sqrtRatioX96,
-            targetSqrtPriceX96,
+            sqrtPriceX96Target,
             pool1.liquidity,
             true,
         )
@@ -143,6 +143,104 @@ describe("LimitSwap", () => {
 
         const wethBalance = await weth.balanceOf(operator.getAddress())
         expect(wethBalance).to.be.gte(ethers.utils.parseEther("1.003"))
+    })
+
+    it.only("should allow others to fill the order", async () => {
+        const pool0 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
+
+        const wethPriceStart = parseInt(pool0.priceOf(WETH).toFixed(0), 10)
+        const wethPriceTarget = wethPriceStart - 10
+
+        const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
+        await dealToken(operator, usdc, usdcAmount.toString())
+
+        const sqrtPriceX96Target = Math.sqrtX96(
+            TokenMath.mul(1, WETH),
+            TokenMath.mul(wethPriceTarget, USDC),
+        )
+
+        // Create order to swap USDC to WETH at target price
+        const createOrderTx = await limitSwap
+            .connect(operator)
+            .createOrder(
+                USDC.address,
+                WETH.address,
+                FeeAmount.MEDIUM,
+                true,
+                usdcAmount.toString(),
+                sqrtPriceX96Target.toString(),
+            )
+        const createOrderReceipt = await createOrderTx.wait()
+        const [
+            {
+                args: { orderId },
+            },
+        ] = ContractUtil.parseEventLogsByName(
+            limitSwap,
+            "OrderCreated",
+            createOrderReceipt.logs,
+        )
+
+        const pool1 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
+
+        const wethAmountToTargetPrice = SqrtPriceMath.getAmount1Delta(
+            pool0.sqrtRatioX96,
+            sqrtPriceX96Target,
+            pool1.liquidity,
+            true,
+        )
+        await dealToken(trader, WETH, wethAmountToTargetPrice.toString())
+
+        // Swap WETH to USDC to partial fill order
+        const swapTx = await swapRouter.connect(trader).exactInputSingle({
+            tokenIn: WETH.address,
+            tokenOut: USDC.address,
+            fee: FeeAmount.MEDIUM,
+            recipient: trader.getAddress(),
+            deadline: Date.now(),
+            amountIn: wethAmountToTargetPrice.toString(),
+            amountOutMinimum: 0,
+            sqrtPriceLimitX96: 0,
+        })
+        await swapTx.wait()
+
+        const { token, amount } = await limitSwap.getOrderFillAmount(orderId)
+        assert(token == WETH.address, "Order should be filled by WETH")
+        // Prepare more amount to ensure order is filled successfully
+        const amountMax = amount.mul(2)
+        await dealToken(trader, WETH, amountMax)
+
+        const fillOrderTx = await limitSwap
+            .connect(trader)
+            .fillOrder(orderId, amountMax)
+        const fillOrderReceipt = await fillOrderTx.wait()
+        const [
+            {
+                args: { amount0, amount1 },
+            },
+        ] = ContractUtil.parseEventLogsByName(
+            limitSwap,
+            "OrderFilled",
+            fillOrderReceipt.logs,
+        )
+
+        // Check operator balances
+        {
+            const usdcBalance = await usdc.balanceOf(operator.getAddress())
+            expect(usdcBalance).to.equal(0)
+
+            const wethBalance = await weth.balanceOf(operator.getAddress())
+            expect(wethBalance).to.be.gte(ethers.utils.parseEther("1"))
+        }
+
+        // Check trader balances
+        {
+            const usdcBalance = await usdc.balanceOf(trader.getAddress())
+            expect(usdcBalance).to.equal(amount0)
+
+            const wethBalance = await weth.balanceOf(trader.getAddress())
+            expect(wethBalance).to.equal(amountMax.div(2).add(amount1))
+        }
     })
 
     it("playground", async () => {

@@ -33,6 +33,13 @@ contract LimitSwap is ILimitSwap {
         nonfungiblePositionManager = _nonfungiblePositionManager;
     }
 
+    function getOrderFillAmount(
+        uint256 orderId
+    ) external override view returns (address token, uint256 amount) {
+        Order memory order = orderBook[orderId];
+        return (order.token1, 0);
+    }
+
     function createOrder(
         address token0,
         address token1,
@@ -96,6 +103,14 @@ contract LimitSwap is ILimitSwap {
         });
 
         emit OrderCreated(orderId);
+    }
+
+    function fillOrder(
+        uint256 orderId,
+        uint256 amountMax
+    ) external override returns (uint256 amount0, uint256 amount1) {
+        (amount0, amount1) = (0, 0);
+        emit OrderFilled(orderId, amount0, amount1);
     }
 
     function closeOrder(
