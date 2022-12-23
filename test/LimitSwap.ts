@@ -44,7 +44,12 @@ describe("LimitSwap", () => {
             Network.address.Uniswap.SwapRouter,
         )
         const limitSwapFactory = await ethers.getContractFactory("LimitSwap")
-        limitSwap = await limitSwapFactory.connect(operator).deploy()
+        limitSwap = await limitSwapFactory
+            .connect(operator)
+            .deploy(
+                Network.address.Uniswap.V3Factory,
+                Network.address.Uniswap.NonfungiblePositionManager,
+            )
 
         // Each user approves tokens to contracts
         for (const user of [operator, trader]) {
@@ -68,17 +73,18 @@ describe("LimitSwap", () => {
         const pool0 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
 
         const wethPriceStart = parseInt(pool0.priceOf(WETH).toFixed(0), 10)
-        const wethPriceTarget = wethPriceStart - 1
+        const wethPriceTarget = wethPriceStart - 10
+
+        const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
+        await dealToken(operator, usdc, usdcAmount.toString())
 
         const targetSqrtPriceX96 = Math.sqrtX96(
             TokenMath.mul(1, WETH),
             TokenMath.mul(wethPriceTarget, USDC),
         )
-        const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
-        await dealToken(operator, usdc, usdcAmount.toString())
 
-        // Open order to swap USDC to WETH at target price
-        const openOrderTx = await limitSwap
+        // Create order to swap USDC to WETH at target price
+        const createOrderTx = await limitSwap
             .connect(operator)
             .createOrder(
                 USDC.address,
@@ -88,7 +94,7 @@ describe("LimitSwap", () => {
                 usdcAmount.toString(),
                 targetSqrtPriceX96.toString(),
             )
-        const openOrderReceipt = await openOrderTx.wait()
+        const createOrderReceipt = await createOrderTx.wait()
         const [
             {
                 args: { orderId },
@@ -96,7 +102,7 @@ describe("LimitSwap", () => {
         ] = ContractUtil.parseEventLogsByName(
             limitSwap,
             "OrderCreated",
-            openOrderReceipt.logs,
+            createOrderReceipt.logs,
         )
 
         const pool1 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
@@ -134,18 +140,9 @@ describe("LimitSwap", () => {
 
         const usdcBalance = await usdc.balanceOf(operator.getAddress())
         expect(usdcBalance).to.equal(0)
-        console.log(
-            `USDC balance: ${ethers.utils.formatUnits(
-                usdcBalance,
-                USDC.decimals,
-            )}`,
-        )
 
         const wethBalance = await weth.balanceOf(operator.getAddress())
-        expect(
-            parseInt(ethers.utils.formatEther(wethBalance), 10),
-        ).to.be.approximately(1, 0.01)
-        console.log(`WETH balance: ${ethers.utils.formatEther(wethBalance)}`)
+        expect(wethBalance).to.be.gte(ethers.utils.parseEther("1.003"))
     })
 
     it("playground", async () => {
@@ -153,25 +150,25 @@ describe("LimitSwap", () => {
 
         const pool = await getPool(USDC, WETH, FeeAmount.MEDIUM)
 
-        const WETHPrice = parseInt(pool.priceOf(WETH).toFixed(0), 10)
+        const wethPrice = parseInt(pool.priceOf(WETH).toFixed(0), 10)
 
-        const currentSqrtX96 = pool.sqrtRatioX96
-        const targetSqrtX96 = Math.sqrtX96(
+        const sqrtPriceX96Current = pool.sqrtRatioX96
+        const sqrtPriceX96Target = Math.sqrtX96(
             TokenMath.mul(1, WETH),
-            TokenMath.mul(WETHPrice - 1, USDC),
+            TokenMath.mul(wethPrice - 1, USDC),
         )
-        console.log(`Current sqrt price: ${currentSqrtX96}`)
-        console.log(`Target sqrt price: ${targetSqrtX96}`)
+        console.log(`Current sqrt price: ${sqrtPriceX96Current}`)
+        console.log(`Target sqrt price: ${sqrtPriceX96Target}`)
 
         const amount0 = SqrtPriceMath.getAmount0Delta(
-            currentSqrtX96,
-            targetSqrtX96,
+            sqrtPriceX96Current,
+            sqrtPriceX96Target,
             pool.liquidity,
             true,
         )
         const amount1 = SqrtPriceMath.getAmount1Delta(
-            currentSqrtX96,
-            targetSqrtX96,
+            sqrtPriceX96Current,
+            sqrtPriceX96Target,
             pool.liquidity,
             true,
         )
