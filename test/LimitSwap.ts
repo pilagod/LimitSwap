@@ -8,7 +8,7 @@ import {
     takeSnapshot,
 } from "@nomicfoundation/hardhat-network-helpers"
 import { Token } from "@uniswap/sdk-core"
-import { FeeAmount, Pool, SqrtPriceMath, TickMath } from "@uniswap/v3-sdk"
+import { FeeAmount, Pool, SqrtPriceMath } from "@uniswap/v3-sdk"
 import { Network } from "~/network"
 import { IERC20, ILimitSwap, IUniswapV3SwapRouter } from "~/typechain-types"
 import { ContractUtil, Math, TokenMath } from "~/util"
@@ -26,6 +26,7 @@ describe("LimitSwap", () => {
 
     let operator: Signer
     let trader: Signer
+    let marketMaker: Signer
 
     let usdc: IERC20
     let weth: IERC20
@@ -34,7 +35,7 @@ describe("LimitSwap", () => {
     let swapRouter: IUniswapV3SwapRouter
 
     before(async () => {
-        ;[operator, trader] = await ethers.getSigners()
+        ;[operator, trader, marketMaker] = await ethers.getSigners()
 
         usdc = await ethers.getContractAt("IERC20", USDC.address)
         weth = await ethers.getContractAt("IERC20", WETH.address)
@@ -52,7 +53,7 @@ describe("LimitSwap", () => {
             )
 
         // Each user approves tokens to contracts
-        for (const user of [operator, trader]) {
+        for (const user of [operator, trader, marketMaker]) {
             for (const token of [usdc, weth]) {
                 for (const contract of [limitSwap, swapRouter]) {
                     await token
@@ -72,8 +73,13 @@ describe("LimitSwap", () => {
     it("should be able to fulfill order after price go through the order price", async () => {
         const pool0 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
 
-        const wethPriceStart = parseInt(pool0.priceOf(WETH).toFixed(0), 10)
-        const wethPriceTarget = wethPriceStart - 10
+        console.log(
+            `Initial pool price (USDC : WETH) = (${pool0
+                .priceOf(WETH)
+                .toFixed(2)} : 1)`,
+        )
+        const wethPriceTarget =
+            parseInt(pool0.priceOf(WETH).toFixed(0), 10) - 10
 
         const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
         await dealToken(operator, usdc, usdcAmount.toString())
@@ -84,6 +90,12 @@ describe("LimitSwap", () => {
         )
 
         // Create order to swap USDC to WETH at target price
+        console.log(
+            `Operator creates order USDC (${ethers.utils.formatUnits(
+                usdcAmount.toString(),
+                USDC.decimals,
+            )}) -> WETH at price (USDC : WETH) = (${wethPriceTarget} : 1)`,
+        )
         const createOrderTx = await limitSwap
             .connect(operator)
             .createOrder(
@@ -121,6 +133,11 @@ describe("LimitSwap", () => {
         await dealToken(trader, WETH, wethAmountToFillOrder.toString())
 
         // Swap WETH to USDC to fill order
+        console.log(
+            `Trader swaps ${ethers.utils.formatEther(
+                wethAmountToFillOrder.toString(),
+            )} WETH to fill the order`,
+        )
         const swapTx = await swapRouter.connect(trader).exactInputSingle({
             tokenIn: WETH.address,
             tokenOut: USDC.address,
@@ -133,23 +150,45 @@ describe("LimitSwap", () => {
         })
         await swapTx.wait()
 
+        const pool2 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
+        console.log(
+            `Trader changes pool price (USDC : WETH) = (${pool2
+                .priceOf(WETH)
+                .toFixed(2)} : 1)`,
+        )
+
+        console.log(`Operator closes the order`)
         const closeOrderTx = await limitSwap
             .connect(operator)
             .closeOrder(orderId)
         await closeOrderTx.wait()
 
         const usdcBalance = await usdc.balanceOf(operator.getAddress())
+        console.log(
+            `Operator USDC balance: ${ethers.utils.formatUnits(
+                usdcBalance,
+                USDC.decimals,
+            )}`,
+        )
         expect(usdcBalance).to.equal(0)
 
         const wethBalance = await weth.balanceOf(operator.getAddress())
+        console.log(
+            `Operator WETH balance: ${ethers.utils.formatEther(wethBalance)}`,
+        )
         expect(wethBalance).to.be.gte(ethers.utils.parseEther("1.003"))
     })
 
-    it.only("should allow others to fill the order", async () => {
+    it("should allow market maker to fill the order", async () => {
         const pool0 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
 
-        const wethPriceStart = parseInt(pool0.priceOf(WETH).toFixed(0), 10)
-        const wethPriceTarget = wethPriceStart - 10
+        console.log(
+            `Initial pool price (USDC : WETH) = (${pool0
+                .priceOf(WETH)
+                .toFixed(2)} : 1)`,
+        )
+        const wethPriceTarget =
+            parseInt(pool0.priceOf(WETH).toFixed(0), 10) - 10
 
         const usdcAmount = TokenMath.mul(wethPriceTarget, USDC)
         await dealToken(operator, usdc, usdcAmount.toString())
@@ -160,6 +199,12 @@ describe("LimitSwap", () => {
         )
 
         // Create order to swap USDC to WETH at target price
+        console.log(
+            `Operator creates order USDC (${ethers.utils.formatUnits(
+                usdcAmount.toString(),
+                USDC.decimals,
+            )}) -> WETH at price (USDC : WETH) = (${wethPriceTarget} : 1)`,
+        )
         const createOrderTx = await limitSwap
             .connect(operator)
             .createOrder(
@@ -191,7 +236,12 @@ describe("LimitSwap", () => {
         )
         await dealToken(trader, WETH, wethAmountToTargetPrice.toString())
 
-        // Swap WETH to USDC to partial fill order
+        // Swap WETH to USDC to partial fill the order
+        console.log(
+            `Trader swaps ${ethers.utils.formatEther(
+                wethAmountToTargetPrice.toString(),
+            )} WETH to partial fill the order`,
+        )
         const swapTx = await swapRouter.connect(trader).exactInputSingle({
             tokenIn: WETH.address,
             tokenOut: USDC.address,
@@ -204,19 +254,29 @@ describe("LimitSwap", () => {
         })
         await swapTx.wait()
 
+        const pool2 = await getPool(USDC, WETH, FeeAmount.MEDIUM)
+        console.log(
+            `Trader changes pool price (USDC : WETH) = (${pool2
+                .priceOf(WETH)
+                .toFixed(2)} : 1)`,
+        )
+
         const { token, amount } = await limitSwap.getOrderFillAmount(orderId)
         assert(token == WETH.address, "Order should be filled by WETH")
-        // Prepare more amount to ensure order is filled successfully
-        const amountMax = amount.mul(2)
-        await dealToken(trader, WETH, amountMax)
+        await dealToken(marketMaker, WETH, amount)
 
+        console.log(
+            `Market maker fills the order with ${ethers.utils.formatEther(
+                amount,
+            )} WETH`,
+        )
         const fillOrderTx = await limitSwap
-            .connect(trader)
-            .fillOrder(orderId, amountMax)
+            .connect(marketMaker)
+            .fillOrder(orderId, amount)
         const fillOrderReceipt = await fillOrderTx.wait()
         const [
             {
-                args: { amount0, amount1 },
+                args: { rebate0, rebate1 },
             },
         ] = ContractUtil.parseEventLogsByName(
             limitSwap,
@@ -227,19 +287,41 @@ describe("LimitSwap", () => {
         // Check operator balances
         {
             const usdcBalance = await usdc.balanceOf(operator.getAddress())
+            console.log(
+                `Operator USDC balance: ${ethers.utils.formatUnits(
+                    usdcBalance,
+                    USDC.decimals,
+                )}`,
+            )
             expect(usdcBalance).to.equal(0)
 
             const wethBalance = await weth.balanceOf(operator.getAddress())
+            console.log(
+                `Operator WETH balance: ${ethers.utils.formatEther(
+                    wethBalance,
+                )}`,
+            )
             expect(wethBalance).to.be.gte(ethers.utils.parseEther("1"))
         }
 
-        // Check trader balances
+        // Check market maker balances
         {
-            const usdcBalance = await usdc.balanceOf(trader.getAddress())
-            expect(usdcBalance).to.equal(amount0)
+            const usdcBalance = await usdc.balanceOf(marketMaker.getAddress())
+            console.log(
+                `Market maker USDC balance: ${ethers.utils.formatUnits(
+                    usdcBalance,
+                    USDC.decimals,
+                )}`,
+            )
+            expect(usdcBalance).to.equal(rebate0)
 
-            const wethBalance = await weth.balanceOf(trader.getAddress())
-            expect(wethBalance).to.equal(amountMax.div(2).add(amount1))
+            const wethBalance = await weth.balanceOf(marketMaker.getAddress())
+            console.log(
+                `Market maker WETH balance: ${ethers.utils.formatEther(
+                    wethBalance,
+                )}`,
+            )
+            expect(wethBalance).to.equal(rebate1)
         }
     })
 

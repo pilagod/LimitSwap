@@ -3,7 +3,7 @@ pragma solidity >=0.7.0;
 
 interface ILimitSwap {
     event OrderCreated(uint256 orderId);
-    event OrderFilled(uint256 orderId, uint256 amount0, uint256 amount1);
+    event OrderFilled(uint256 orderId, uint256 rebate0, uint256 rebate1);
     event OrderClosed(uint256 orderId);
 
     function getOrderFillAmount(
@@ -22,7 +22,7 @@ interface ILimitSwap {
     function fillOrder(
         uint256 orderId,
         uint256 amountMax
-    ) external returns (uint256 amount0, uint256 amount1);
+    ) external returns (uint256 rebate0, uint256 rebate1);
 
     function closeOrder(
         uint256 orderId
