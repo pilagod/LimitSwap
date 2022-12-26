@@ -1,8 +1,10 @@
 import "dotenv/config"
 import "tsconfig-paths/register"
-import "@typechain/hardhat"
+
+import "hardhat-gas-reporter"
 import "@nomiclabs/hardhat-ethers"
 import "@nomicfoundation/hardhat-chai-matchers"
+import "@typechain/hardhat"
 
 import chai from "chai"
 import chaiAsPromised from "chai-as-promised"
