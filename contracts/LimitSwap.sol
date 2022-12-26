@@ -174,6 +174,7 @@ contract LimitSwap is ILimitSwap {
         require(msg.sender == order.owner, "Not the owner");
 
         (amount0, amount1) = closeOrder(order);
+
         if (amount0 > 0) {
             IERC20(order.token0).safeTransfer(order.owner, amount0);
         }
@@ -268,6 +269,7 @@ contract LimitSwap is ILimitSwap {
     function closeOrder(
         Order memory order
     ) internal returns (uint256 amount0, uint256 amount1) {
+        // Decreasing liquidity only updates accounting on the position manager
         INonfungiblePositionManager.DecreaseLiquidityParams
             memory decreaseLiquidityParams = INonfungiblePositionManager
                 .DecreaseLiquidityParams({
@@ -280,6 +282,7 @@ contract LimitSwap is ILimitSwap {
         INonfungiblePositionManager(nonfungiblePositionManager)
             .decreaseLiquidity(decreaseLiquidityParams);
 
+        // Collecting is the process to really settle the position and trigger token transfers
         INonfungiblePositionManager.CollectParams
             memory collectParams = INonfungiblePositionManager.CollectParams({
                 tokenId: order.id,
@@ -295,7 +298,5 @@ contract LimitSwap is ILimitSwap {
         delete orderBook[order.id];
 
         emit OrderClosed(order.id);
-
-        return (amount0, amount1);
     }
 }
